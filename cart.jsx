@@ -9,14 +9,17 @@ const products = [
 const Cart = (props) => {
   const { Card, Accordion, Button } = ReactBootstrap;
   let data = props.location.data ? props.location.data : products;
-  console.log(`data:${JSON.stringify(data)}`);
+  console.log(`data:${data}`);
 
   return <Accordion defaultActiveKey="0">{list}</Accordion>;
 };
 
 const useDataApi = (initialUrl, initialData) => {
   const { useState, useEffect, useReducer } = React;
-  const [url, setUrl] = useState(initialUrl);
+  const [url, setUrl] = useState({
+    url: initialUrl,
+    fetch: true
+  });
 
   const [state, dispatch] = useReducer(dataFetchReducer, {
     isLoading: false,
@@ -25,26 +28,25 @@ const useDataApi = (initialUrl, initialData) => {
   });
   console.log(`useDataApi called`);
   useEffect(() => {
+    if (!url.fetch) return;
     console.log("useEffect Called");
-    let didCancel = false;
     const fetchData = async () => {
       dispatch({ type: "FETCH_INIT" });
+      console.log('fetch init');
       try {
-        const result = await axios(url);
+        const result = await axios(url.url);
         console.log("FETCH FROM URl");
-        if (!didCancel) {
-          dispatch({ type: "FETCH_SUCCESS", payload: result.data });
-        }
+        dispatch({ type: "FETCH_SUCCESS", payload: {data: result.data.data, restocked: state.data.restocked++} });
+        console.log(state);
       } catch (error) {
-        if (!didCancel) {
-          dispatch({ type: "FETCH_FAILURE" });
-        }
+        dispatch({ type: "FETCH_FAILURE" });
       }
+      setUrl({
+        ...url,
+        fetch: false
+      });
     };
     fetchData();
-    return () => {
-      didCancel = true;
-    };
   }, [url]);
   return [state, setUrl];
 };
@@ -75,7 +77,6 @@ const dataFetchReducer = (state, action) => {
 };
 
 const Products = (props) => {
-  const [items, setItems] = React.useState(products);
   const [cart, setCart] = React.useState([]);
   const [total, setTotal] = React.useState(0);
   const {
@@ -90,24 +91,35 @@ const Products = (props) => {
   } = ReactBootstrap;
   //  Fetch Data
   const { Fragment, useState, useEffect, useReducer } = React;
-  const [query, setQuery] = useState("http://localhost:1337/products");
+  const [query, setQuery] = useState("http://localhost:1337/api/products");
   const [{ data, isLoading, isError }, doFetch] = useDataApi(
-    "http://localhost:1337/products",
-    {
-      data: [],
-    }
+    "http://localhost:1337/api/products",
+    {data: [], restocked: 0}
   );
-  console.log(`Rendering Products ${JSON.stringify(data)}`);
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    console.log('resetting items', data.data);
+    data.data.length > 0 && setItems(data.data)
+  }, [data])
+  console.log(`Rendering Products`, data);
   // Fetch Data
   const addToCart = (e) => {
     let name = e.target.name;
-    let item = items.filter((item) => item.name == name);
-    console.log(`add to Cart ${JSON.stringify(item)}`);
-    setCart([...cart, ...item]);
-    //doFetch(query);
+    const i = items.map(item => item.attributes.name).indexOf(name);
+    let item = items[i];
+    if (item.attributes.instock <= 0) return alert(`Can't add anymore ${item.attributes.name} to cart`);
+    const tempdata = [...items];
+    tempdata[i].attributes.instock = tempdata[i].attributes.instock - 1;
+    setItems(tempdata);
+    console.log(`add to Cart `, item);
+    setCart([...cart, item]);
   };
-  const deleteCartItem = (index) => {
+  const deleteCartItem = (index, name) => {
     let newCart = cart.filter((item, i) => index != i);
+    const i = items.map(item => item.attributes.name).indexOf(name);
+    const tempdata = [...items];
+    tempdata[i].attributes.instock = tempdata[i].attributes.instock + 1;
+    setItems(tempdata);
     setCart(newCart);
   };
   const photos = ["apple.png", "orange.png", "beans.png", "cabbage.png"];
@@ -115,31 +127,32 @@ const Products = (props) => {
   let list = items.map((item, index) => {
     //let n = index + 1049;
     //let url = "https://picsum.photos/id/" + n + "/50/50";
-
+    const {attributes: Item} = item;;
     return (
       <li key={index}>
         <Image src={photos[index % 4]} width={70} roundedCircle></Image>
         <Button variant="primary" size="large">
-          {item.name}:{item.cost}
+          {Item.name}:{Item.cost} inStock {Item.instock}
         </Button>
-        <input name={item.name} type="submit" onClick={addToCart}></input>
+        <input name={Item.name} type="submit" onClick={addToCart}></input>
       </li>
     );
   });
   let cartList = cart.map((item, index) => {
+    const {attributes: Item} = item
     return (
       <Card key={index}>
         <Card.Header>
           <Accordion.Toggle as={Button} variant="link" eventKey={1 + index}>
-            {item.name}
+            {Item.name}
           </Accordion.Toggle>
         </Card.Header>
         <Accordion.Collapse
-          onClick={() => deleteCartItem(index)}
+          onClick={() => deleteCartItem(index, Item.name)}
           eventKey={1 + index}
         >
           <Card.Body>
-            $ {item.cost} from {item.country}
+            $ {Item.cost} from {Item.country}
           </Card.Body>
         </Accordion.Collapse>
       </Card>
@@ -159,14 +172,16 @@ const Products = (props) => {
   };
 
   const checkOut = () => {
-    let costs = cart.map((item) => item.cost);
+    let costs = cart.map((item) => item.attributes.cost);
     const reducer = (accum, current) => accum + current;
     let newTotal = costs.reduce(reducer, 0);
     console.log(`total updated to ${newTotal}`);
     return newTotal;
   };
   // TODO: implement the restockProducts function
-  const restockProducts = (url) => {};
+  const restockProducts = (url) => {
+    doFetch({url, fetch: true});
+  };
 
   return (
     <Container>
@@ -188,7 +203,7 @@ const Products = (props) => {
       <Row>
         <form
           onSubmit={(event) => {
-            restockProducts(`http://localhost:1337/${query}`);
+            restockProducts(query);
             console.log(`Restock called on ${query}`);
             event.preventDefault();
           }}
